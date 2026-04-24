@@ -1,4 +1,3 @@
-pyTelegramBotAPI
+aiogram
 firebase-admin
-flask
-gunicorn
+python-dotenv
