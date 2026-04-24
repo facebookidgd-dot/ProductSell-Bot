@@ -4,6 +4,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 import json
+import time  # Railway conflict fix করার জন্য
 
 # 🔒 Railway Variables থেকে Token এবং Admin ID নিবে
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -156,5 +157,7 @@ def admin_action(call):
 
 # Bot Start Command
 bot.remove_webhook()
-print("Bot is Starting...")
+print("⏳ Waiting 15 seconds for older bot instances to close on Railway...")
+time.sleep(15)  # ১৫ সেকেন্ড অপেক্ষা করবে
+print("✅ Bot is Starting Now...")
 bot.infinity_polling()
