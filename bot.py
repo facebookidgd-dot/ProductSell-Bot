@@ -3,16 +3,29 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
+import json
 
-# Railway Variables থেকে Token এবং Admin ID নিবে
-# সরাসরি টোকেন এবং আইডি বসাচ্ছি
-BOT_TOKEN = "8025084655:AAEO7Pv7klavtEOnWJs5MASzY0_SsAgpT60"
-ADMIN_ID = "7753282667"  # আপনার আসল আইডি
+# 🔒 Railway Variables থেকে Token এবং Admin ID নিবে
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID = os.environ.get("ADMIN_ID")
+FIREBASE_JSON_STR = os.environ.get("FIREBASE_JSON") # Firebase JSON এর টেক্সট
 
-# 🧱 Firebase Database Setup
-cred = credentials.Certificate("firebase-key.json")
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+# Error Handling (যদি Railway তে ভ্যারিয়েবল দিতে ভুলে যান)
+if not all([BOT_TOKEN, ADMIN_ID, FIREBASE_JSON_STR]):
+    raise ValueError("⚠️ Environment Variables missing! Please check BOT_TOKEN, ADMIN_ID, or FIREBASE_JSON.")
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# 🧱 Firebase Database Setup (Environment Variable থেকে)
+try:
+    # JSON String কে Python Dictionary তে কনভার্ট করা
+    firebase_credentials = json.loads(FIREBASE_JSON_STR)
+    cred = credentials.Certificate(firebase_credentials)
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
+    print("✅ Firebase Connected Successfully!")
+except Exception as e:
+    print(f"❌ Firebase Connection Failed: {e}")
 
 # 🔹 1. Start & Menu Command
 @bot.message_handler(commands=['start'])
@@ -142,6 +155,6 @@ def admin_action(call):
         bot.send_message(user_id, "❌ দুঃখিত! আপনার Payment টি যাচাই করা সম্ভব হয়নি (TRX ID ভুল)। এডমিনের সাথে যোগাযোগ করুন।")
 
 # Bot Start Command
-bot.remove_webhook()    # <--- এই নতুন লাইনটি যোগ করুন
+bot.remove_webhook()
 print("Bot is Starting...")
 bot.infinity_polling()
