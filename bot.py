@@ -143,5 +143,6 @@ def admin_action(call):
         bot.send_message(user_id, "❌ দুঃখিত! আপনার Payment টি যাচাই করা সম্ভব হয়নি (TRX ID ভুল)। এডমিনের সাথে যোগাযোগ করুন।")
 
 # Bot Start Command
+bot.remove_webhook()    # <--- এই নতুন লাইনটি যোগ করুন
 print("Bot is Starting...")
 bot.infinity_polling()
