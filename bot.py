@@ -5,10 +5,9 @@ from firebase_admin import credentials, firestore
 import os
 
 # Railway Variables থেকে Token এবং Admin ID নিবে
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = os.getenv('ADMIN_ID')
-
-bot = telebot.TeleBot(BOT_TOKEN)
+# সরাসরি টোকেন এবং আইডি বসাচ্ছি
+BOT_TOKEN = "8025084655:AAEO7Pv7klavtEOnWJs5MASzY0_SsAgpT60"
+ADMIN_ID = "7753282667"  # আপনার আসল আইডি
 
 # 🧱 Firebase Database Setup
 cred = credentials.Certificate("firebase-key.json")
