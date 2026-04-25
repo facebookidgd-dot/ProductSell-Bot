@@ -18,20 +18,19 @@ ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
 
 # --- Firebase Setup ---
 try:
-    # পরিবেশ ভেরিয়েবল থেকে JSON স্ট্রিংটি লোড করা হচ্ছে
     service_account_info = json.loads(os.getenv('FIREBASE_SERVICE_ACCOUNT'))
     cred = credentials.Certificate(service_account_info)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
-    print("✅ Firebase Connected Successfully!")
+    print("✅ Firebase Connected!")
 except Exception as e:
-    print(f"❌ Firebase Connection Error: {e}")
+    print(f"❌ Firebase Error: {e}")
     exit(1)
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# --- FSM States (প্রসেস কন্ট্রোল করার জন্য) ---
+# --- FSM States ---
 class AdminStates(StatesGroup):
     set_welcome = State()
     set_help = State()
@@ -73,7 +72,6 @@ def cancel_kb():
 # --- Helper Functions ---
 
 async def initialize_db():
-    """বট চালু হওয়ার সময় ডাটাবেস চেক করবে"""
     print("⚙️ Initializing Database...")
     settings_ref = db.collection('settings')
     defaults = {
@@ -90,6 +88,18 @@ async def initialize_db():
 async def get_setting(key):
     doc = db.collection('settings').document(key).get()
     return doc.to_dict()['text'] if doc.exists else ""
+
+async def get_safe_count(collection_name):
+    """যেকোনো ভার্সনে নির্ভুলভাবে ডাটা কাউন্ট করার ফাংশন"""
+    try:
+        # প্রথমে দ্রুততম উপায় চেষ্টা করবে
+        count_query = db.collection(collection_name).count().get()
+        if isinstance(count_query, list) and len(count_query) > 0:
+            return count_query[0].value
+        return count_query.value
+    except Exception:
+        # যদি উপরেরটি ফেল করে, তবে ডকুমেন্ট লিস্ট করে গুনবে (১০০% নিরাপদ)
+        return len(list(db.collection(collection_name).stream()))
 
 # --- Handlers: User Side ---
 
@@ -153,18 +163,10 @@ async def buy_process(callback_query: types.CallbackQuery, state: FSMContext):
 async def handle_trx(message: types.Message, state: FSMContext):
     data = await state.get_data()
     trx_id = message.text
-    order_data = {
-        "user_id": message.from_user.id, "user_name": message.from_user.full_name,
-        "product_id": data['target_prod_id'], "product_name": data['target_prod_name'],
-        "price": data['target_prod_price'], "trx_id": trx_id, "status": "pending"
-    }
+    order_data = {"user_id": message.from_user.id, "user_name": message.from_user.full_name, "product_id": data['target_prod_id'], "product_name": data['target_prod_name'], "price": data['target_prod_price'], "trx_id": trx_id, "status": "pending"}
     new_order = db.collection('orders').add(order_data)
     await message.answer("⏳ পেমেন্ট যাচাই হচ্ছে...")
-    
-    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{new_order[1].id}"),
-         InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{new_order[1].id}")]
-    ])
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{new_order[1].id}"), InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{new_order[1].id}")]])
     await bot.send_message(ADMIN_ID, f"🆕 **New Order!**\n\n👤 User: {message.from_user.full_name}\n📦 Product: {data['target_prod_name']}\n💰 Price: {data['target_prod_price']}৳\n🧾 TRX ID: {trx_id}", reply_markup=admin_kb, parse_mode="Markdown")
     await state.clear()
 
@@ -368,8 +370,8 @@ async def send_broadcast(message: types.Message, state: FSMContext):
 async def admin_stats(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     try:
-        u_count = db.collection('users').count().get()[0].value
-        o_count = db.collection('orders').count().get()[0].value
+        u_count = await get_safe_count('users')
+        o_count = await get_safe_count('orders')
         await message.answer(f"📊 **Bot Statistics**\n\n👥 Total Users: {u_count}\n📦 Total Orders: {o_count}", parse_mode="Markdown", reply_markup=admin_main_menu())
     except Exception as e:
         await message.answer(f"❌ Error: {e}", reply_markup=admin_main_menu())
