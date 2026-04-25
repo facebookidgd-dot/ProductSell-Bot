@@ -10,7 +10,6 @@ from aiogram.fsm.context import FSMContext
 from aiohttp import web
 import firebase_admin
 from firebase_admin import credentials, firestore
-
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO)
 API_TOKEN = os.getenv('BOT_TOKEN')
@@ -80,7 +79,6 @@ async def get_setting(key):
 async def cmd_start(message: types.Message):
     user_ref = db.collection('users').document(str(message.from_user.id))
     user_ref.set({'username': message.from_user.username, 'id': message.from_user.id}, merge=True)
-
     welcome_text = await get_setting('welcome')
     if message.from_user.id == ADMIN_ID:
         await message.answer("👑 Welcome Admin!", reply_markup=admin_main_menu())
@@ -95,7 +93,6 @@ async def show_categories(message: types.Message):
     for doc in cats_ref:
         found = True
         buttons.append([InlineKeyboardButton(text=doc.to_dict()['name'], callback_data=f"cat_{doc.id}")])
-    
     if not found:
         await message.answer("দুঃখিত, বর্তমানে কোনো ক্যাটাগরি নেই।")
         return
@@ -111,7 +108,6 @@ async def show_products(callback_query: types.CallbackQuery):
         found = True
         p = doc.to_dict()
         buttons.append([InlineKeyboardButton(text=f"{p['name']} - {p['price']}৳", callback_data=f"buy_{doc.id}")])
-    
     if not found:
         await callback_query.answer("এই ক্যাটাগরিতে কোনো প্রোডাক্ট নেই!", show_alert=True)
     else:
@@ -124,7 +120,6 @@ async def buy_process(callback_query: types.CallbackQuery, state: FSMContext):
     if not prod_doc.exists: return
     p = prod_doc.to_dict()
     await state.update_data(target_prod_id=prod_id, target_prod_name=p['name'], target_prod_price=p['price'])
-    
     instr = f"💳 **Payment Instruction**\n\nProduct: {p['name']}\nAmount: {p['price']}৳\n\nBkash/Nagad: `01XXXXXXXXX`\n\n✅ পেমেন্ট করার পর আপনার **Transaction ID** লিখে এখানে পাঠান।"
     await callback_query.message.answer(instr, parse_mode="Markdown")
     await callback_query.answer()
@@ -191,10 +186,9 @@ async def admin_reject(callback_query: types.CallbackQuery):
     order = order_ref.get()
     if not order.exists: return
     order_ref.update({"status": "rejected"})
-    await bot.send_message(order['user_id'], "❌ আপনার পেমেন্টটি রিজেক্ট করা করা হয়েছে।")
+    await bot.send_message(order['user_id'], "❌ আপনার পেমেন্টটি রিজেক্ট করা হয়েছে।")
     await callback_query.message.edit_text(f"❌ Order {order_id} Rejected!")
 
-# Admin: Add Category
 @dp.message(F.text == "➕ Add Category")
 async def admin_add_cat_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
@@ -207,7 +201,34 @@ async def save_cat(message: types.Message, state: FSMContext):
     await message.answer(f"✅ ক্যাটাগরি তৈরি হয়েছে!\n🆔 ID: {res[1].id}", reply_markup=admin_main_menu())
     await state.clear()
 
-# Admin: Add Product
+@dp.message(F.text == "📂 View Categories")
+async def admin_view_cats(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    cats_ref = db.collection('categories').stream()
+    msg = "📂 **Current Categories & IDs:**\n\n"
+    found = False
+    for doc in cats_ref:
+        found = True
+        msg += f"🔹 {doc.to_dict()['name']} ➔ `{doc.id}`\n"
+    if not found: await message.answer("কোনো ক্যাটাগরি নেই।"); return
+    await message.answer(msg, parse_mode="Markdown")
+
+@dp.message(F.text == "🗑 Delete Category")
+async def admin_del_cat_start(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    cats_ref = db.collection('categories').stream()
+    buttons = []
+    for doc in cats_ref:
+        buttons.append([InlineKeyboardButton(text=f"❌ {doc.to_dict()['name']}", callback_data=f"delcat_{doc.id}")])
+    if not buttons: await message.answer("কোনো ক্যাটাগরি নেই।"); return
+    await message.answer("যে ক্যাটাগরি ডিলিট করতে চান সেটি সিলেক্ট করুন:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data.startswith("delcat_"))
+async def perform_del_cat(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID: return
+    db.collection('categories').document(callback_query.data.split("_")[1]).delete()
+    await callback_query.message.edit_text("✅ ক্যাটাগরি ডিলিট হয়েছে!")
+
 @dp.message(F.text == "➕ Add Product")
 async def admin_add_prod_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
@@ -227,7 +248,7 @@ async def proc_p_price(message: types.Message, state: FSMContext):
     await state.set_state(AdminStates.add_prod_cat_id)
 
 @dp.message(AdminStates.add_prod_cat_id)
-async as proc_p_cat(message: types.Message, state: FSMContext):
+async def proc_p_cat(message: types.Message, state: FSMContext):
     if message.text.lower() == 'list':
         cats_ref = db.collection('categories').stream()
         msg = "📂 **Current Categories & IDs:**\n\n"
@@ -249,26 +270,8 @@ async def proc_p_content(message: types.Message, state: FSMContext):
     await message.answer(f"✅ প্রোডাক্ট যোগ হয়েছে!\n🆔 ID: {res[1].id}", reply_markup=admin_main_menu())
     await state.clear()
 
-# Admin: Delete Category
-@dp.message(F.text == "🗑 Delete Category")
-async def admin_del_cat_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
-    cats_ref = db.collection('categories').stream()
-    buttons = []
-    for doc in cats_ref:
-        buttons.append([InlineKeyboardButton(text=f"❌ {doc.to_dict()['name']}", callback_data=f"delcat_{doc.id}")])
-    if not buttons: await message.answer("কোনো ক্যাটাগরি নেই।"); return
-    await message.answer("যে ক্যাটাগরি ডিলিট করতে চান সেটি সিলেক্ট করুন:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-
-@dp.callback_query(F.data.startswith("delcat_"))
-async def perform_del_cat(callback_query: types.CallbackQuery):
-    if callback_query.from_user.id != ADMIN_ID: return
-    db.collection('categories').document(callback_query.data.split("_")[1]).delete()
-    await callback_query.message.edit_text("✅ ক্যাটাগরি ডিলিট হয়েছে!")
-
-# Admin: Delete Product
 @dp.message(F.text == "🗑 Delete Product")
-asyncించ as admin_del_prod_start(message: types.Message, state: FSMContext):
+async def admin_del_prod_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
     prods_ref = db.collection('products').stream()
     buttons = []
@@ -284,7 +287,6 @@ async def perform_del_prod(callback_query: types.CallbackQuery):
     db.collection('products').document(callback_query.data.split("_")[1]).delete()
     await callback_query.message.edit_text("✅ প্রোডাক্ট ডিলিট হয়েছে!")
 
-# Admin: Edit Texts
 @dp.message(F.text == "📝 Edit Texts")
 async def admin_edit_menu(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
@@ -312,7 +314,6 @@ async def save_edited_text(message: types.Message, state: FSMContext):
     await message.answer(f"✅ {key} আপডেট হয়েছে!", reply_markup=admin_main_menu())
     await state.clear()
 
-# Admin: Broadcast
 @dp.message(F.text == "📢 Broadcast")
 async def admin_broadcast_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
@@ -331,7 +332,6 @@ async def send_broadcast(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Broadcast Sent to {count} users!", reply_markup=admin_main_menu())
     await state.clear()
 
-# Admin: Stats
 @dp.message(F.text == "📊 Stats")
 async def admin_stats(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
@@ -340,7 +340,7 @@ async def admin_stats(message: types.Message):
         o_count = db.collection('orders').count().get()[0].value
         await message.answer(f"📊 **Bot Statistics**\n\n👥 Total Users: {u_count}\n📦 Total Orders: {o_count}", parse_mode="Markdown", reply_markup=admin_main_menu())
     except Exception as e:
-        await message.answer(f"❌ Error fetching stats: {e}", reply_markup=admin_main_menu())
+        await message.answer(f"❌ Error: {e}", reply_markup=admin_main_menu())
 
 @dp.message(F.text == "🔙 Back to User Menu")
 async def back_to_user(message: types.Message):
@@ -364,3 +364,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
