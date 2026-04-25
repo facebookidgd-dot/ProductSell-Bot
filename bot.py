@@ -279,4 +279,10 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import traceback  # এটি এরর দেখার জন্য প্রয়োজন
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        print("❌ --- CRITICAL ERROR FOUND --- ❌")
+        traceback.print_exc()  # এটি আসল এররটি লগে প্রিন্ট করবে
+        print("---------------------------------")
