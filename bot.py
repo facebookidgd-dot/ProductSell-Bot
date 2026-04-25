@@ -191,24 +191,8 @@ async def admin_reject(callback_query: types.CallbackQuery):
     order = order_ref.get()
     if not order.exists: return
     order_ref.update({"status": "rejected"})
-    await bot.send_message(order['user_id'], "❌ আপনার পেমেন্টটি রিজেক্ট করা হয়েছে।")
+    await bot.send_message(order['user_id'], "❌ আপনার পেমেন্টটি রিজেক্ট করা করা হয়েছে।")
     await callback_query.message.edit_text(f"❌ Order {order_id} Rejected!")
-
-# Admin: View All Categories (New Feature)
-@dp.message(F.text == "📂 View Categories")
-async def admin_view_cats(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    cats_ref = db.collection('categories').stream()
-    msg = "📂 **Existing Categories & IDs:**\n\n"
-    found = False
-    for doc in cats_ref:
-        found = True
-        msg += f"🔹 {doc.to_dict()['name']} ➔ `{doc.id}`\n"
-    
-    if not found:
-        await message.answer("কোনো ক্যাটাগরি নেই।")
-    else:
-        await message.answer(msg, parse_mode="Markdown")
 
 # Admin: Add Category
 @dp.message(F.text == "➕ Add Category")
@@ -243,7 +227,7 @@ async def proc_p_price(message: types.Message, state: FSMContext):
     await state.set_state(AdminStates.add_prod_cat_id)
 
 @dp.message(AdminStates.add_prod_cat_id)
-async def proc_p_cat(message: types.Message, state: FSMContext):
+async as proc_p_cat(message: types.Message, state: FSMContext):
     if message.text.lower() == 'list':
         cats_ref = db.collection('categories').stream()
         msg = "📂 **Current Categories & IDs:**\n\n"
@@ -284,7 +268,7 @@ async def perform_del_cat(callback_query: types.CallbackQuery):
 
 # Admin: Delete Product
 @dp.message(F.text == "🗑 Delete Product")
-async def admin_del_prod_start(message: types.Message, state: FSMContext):
+asyncించ as admin_del_prod_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
     prods_ref = db.collection('products').stream()
     buttons = []
@@ -347,18 +331,16 @@ async def send_broadcast(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Broadcast Sent to {count} users!", reply_markup=admin_main_menu())
     await state.clear()
 
-# Admin: Stats (Fixed and Robust)
+# Admin: Stats
 @dp.message(F.text == "📊 Stats")
 async def admin_stats(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     try:
-        # Firestore count() ব্যবহার করে সঠিক সংখ্যা বের করা
         u_count = db.collection('users').count().get()[0].value
         o_count = db.collection('orders').count().get()[0].value
         await message.answer(f"📊 **Bot Statistics**\n\n👥 Total Users: {u_count}\n📦 Total Orders: {o_count}", parse_mode="Markdown", reply_markup=admin_main_menu())
     except Exception as e:
-        logging.error(f"Stats Error: {e}")
-        await message.answer("❌ Stats লোড করতে সমস্যা হচ্ছে।", reply_markup=admin_main_menu())
+        await message.answer(f"❌ Error fetching stats: {e}", reply_markup=admin_main_menu())
 
 @dp.message(F.text == "🔙 Back to User Menu")
 async def back_to_user(message: types.Message):
