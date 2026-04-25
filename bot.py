@@ -3,10 +3,12 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiohttp import web
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # --- Configuration ---
 API_TOKEN = os.getenv('BOT_TOKEN')
@@ -16,133 +18,158 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# --- States (FSM) ---
+# --- Firebase Setup ---
+cred = credentials.Certificate(os.getenv('FIREBASE_SERVICE_ACCOUNT'))
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+# --- States for Admin ---
 class AdminStates(StatesGroup):
-    adding_product_name = State()
-    adding_product_price = State()
-    adding_product_desc = State()
-    adding_product_content = State()
-    broadcasting = State()
+    set_welcome = State()
+    add_cat_name = State()
+    add_prod_name = State()
+    add_prod_price = State()
+    add_prod_cat_id = State()
+    add_prod_content = State()
 
-class UserStates(StatesGroup):
-    submitting_trx = State()
+# --- Auto-Initialization Logic ---
+async def initialize_database():
+    """বট চালু হওয়ার সময় চেক করবে ডাটাবেস ঠিক আছে কি না"""
+    print("⚙️ Initializing Database...")
+    # ওয়েলকাম মেসেজ চেক এবং অটো-ক্রিয়েট
+    doc_ref = db.collection('settings').document('welcome')
+    doc = doc_ref.get()
+    if not doc.exists:
+        print("✨ Creating default welcome message...")
+        doc_ref.set({'text': "👋 স্বাগতম! আমাদের ডিজিটাল শপে আপনাকে স্বাগতম।\nনিচের মেনু থেকে অপশন সিলেক্ট করুন:"})
+    print("✅ Database Ready!")
 
-# --- Keyboards (Reply Menu) ---
-
+# --- Keyboards ---
 def user_main_menu():
-    keyboard = ReplyKeyboardMarkup(keyboard=[
+    return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="🛒 Products"), KeyboardButton(text="📦 My Orders")],
-        [KeyboardButton(text="🎁 Referral"), KeyboardButton(text="💬 Support")],
-        [KeyboardButton(text="ℹ️ Help")]
+        [KeyboardButton(text="🎁 Referral"), KeyboardButton(text="💬 Support")]
     ], resize_keyboard=True)
-    return keyboard
 
 def admin_main_menu():
-    keyboard = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="➕ Add Product"), KeyboardButton(text="📊 Stats")],
-        [KeyboardButton(text="📋 All Orders"), KeyboardButton(text="📢 Broadcast")],
-        [KeyboardButton(text="👥 Users"), KeyboardButton(text="🔙 Back to User Menu")]
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="➕ Add Category"), KeyboardButton(text="➕ Add Product")],
+        [KeyboardButton(text="📝 Change Welcome"), KeyboardButton(text="📊 Stats")],
+        [KeyboardButton(text="🔙 Back to User Menu")]
     ], resize_keyboard=True)
-    return keyboard
 
 # --- Handlers: User Side ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # অটোমেটিক ওয়েলকাম মেসেজ ডাটাবেস থেকে নেওয়া
+    doc = db.collection('settings').document('welcome').get()
+    welcome_text = doc.to_dict()['text'] if doc.exists else "Welcome!"
+    
     if message.from_user.id == ADMIN_ID:
-        await message.answer("👑 Welcome Admin! Select an option:", reply_markup=admin_main_menu())
+        await message.answer("👑 Admin Panel:", reply_markup=admin_main_menu())
     else:
-        await message.answer("👋 Welcome to Digital Shop! Select a category:", reply_markup=user_main_menu())
+        await message.answer(welcome_text, reply_markup=user_main_menu())
 
 @dp.message(F.text == "🛒 Products")
-async def show_products(message: types.Message):
-    # এখানে ডাটাবেস থেকে ক্যাটাগরি আসবে
-    text = "Choose a category:\n🔐 VPN\n📱 Apps\n📚 Ebook"
-    # ক্যাটাগরির জন্য ইনলাইন বাটন ব্যবহার করা ভালো UX এর জন্য
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 VPN Services", callback_data="cat_vpn")],
-        [InlineKeyboardButton(text="📱 Premium Apps", callback_data="cat_apps")],
-        [InlineKeyboardButton(text="📚 Ebooks", callback_data="cat_ebook")]
-    ])
-    await message.answer(text, reply_markup=keyboard)
+async def show_categories(message: types.Message):
+    # ক্যাটাগরি অটোমেটিক ডাটাবেস থেকে আসবে
+    cats_ref = db.collection('categories').stream()
+    buttons = []
+    found = False
+    for doc in cats_ref:
+        found = True
+        buttons.append([InlineKeyboardButton(text=doc.to_dict()['name'], callback_data=f"cat_{doc.id}")])
+    
+    if not found:
+        await message.answer("দুঃখিত, বর্তমানে কোনো ক্যাটাগরি নেই।")
+        return
 
-@dp.message(F.text == "🎁 Referral")
-async def show_referral(message: types.Message):
-    ref_link = f"https://t.me/YourBotUsername?start={message.from_user.id}"
-    await message.answer(f"🔗 Your Referral Link:\n{ref_link}\n\nEarn rewards for every friend!")
+    await message.answer("ক্যাটেগরি সিলেক্ট করুন:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
-@dp.message(F.text == "💬 Support")
-async def show_support(message: types.Message):
-    await message.answer("Contact Support: @YourAdminUsername")
+@dp.callback_query(F.data.startswith("cat_"))
+async def show_products(callback_query: types.CallbackQuery):
+    cat_id = callback_query.data.split("_")[1]
+    prods_ref = db.collection('products').where("category_id", "==", cat_id).stream()
+    
+    buttons = []
+    found = False
+    for doc in prods_ref:
+        found = True
+        p = doc.to_dict()
+        buttons.append([InlineKeyboardButton(text=f"{p['name']} - {p['price']}৳", callback_data=f"buy_{doc.id}")])
+    
+    if not found:
+        await callback_query.answer("এই ক্যাটাগরিতে কোনো প্রোডাক্ট নেই!", show_alert=True)
+    else:
+        await callback_query.message.edit_text("প্রোডাক্ট সিলেক্ট করুন:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
-@dp.message(F.text == "ℹ️ Help")
-async def show_help(message: types.Message):
-    await message.answer("How to use:\n1. Select Product\n2. Pay via Bkash/Nagad\n3. Submit TRX ID\n4. Get instant delivery!")
+# --- Handlers: Admin Side (Automatic Collection Creation) ---
 
-# --- Handlers: Admin Side ---
-
-@dp.message(F.text == "🔙 Back to User Menu")
-async def back_to_user(message: types.Message):
-    if message.from_user.id == ADMIN_ID:
-        await message.answer("Switching to User View...", reply_markup=user_main_menu())
-
-@dp.message(F.text == "➕ Add Product")
-async def add_prod_start(message: types.Message, state: FSMContext):
+@dp.message(F.text == "➕ Add Category")
+async def admin_add_cat(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
-    await message.answer("Enter Product Name:")
-    await state.set_state(AdminStates.adding_product_name)
+    await message.answer("নতুন ক্যাটাগরির নাম লিখুন:")
+    await state.set_state(AdminStates.add_cat_name)
 
-@dp.message(AdminStates.adding_product_name)
-async def process_name(message: types.Message, state: FSMContext):
-    await state.update_data(name=message.text)
-    await message.answer("Enter Product Price (e.g., 100):")
-    await state.set_state(AdminStates.adding_product_price)
-
-@dp.message(AdminStates.adding_product_price)
-async def process_price(message: types.Message, state: FSMContext):
-    await state.update_data(price=message.text)
-    await message.answer("Enter Product Description:")
-    await state.set_state(AdminStates.adding_product_desc)
-
-@dp.message(AdminStates.adding_product_desc)
-async def process_desc(message: types.Message, state: FSMContext):
-    await state.update_data(desc=message.text)
-    await message.answer("Enter Delivery Content (Link/Text/File ID):")
-    await state.set_state(AdminStates.adding_product_content)
-
-@dp.message(AdminStates.adding_product_content)
-async def process_content(message: types.Message, state: FSMContext):
-    user_data = await state.get_data()
-    # এখানে ডাটাবেস (Firebase) এ সেভ করার কোড বসবে
-    await message.answer(
-        f"✅ Product Added Successfully!\n\n"
-        f"📦 Name: {user_data['name']}\n"
-        f"💰 Price: {user_data['price']}৳\n"
-        f"📝 Desc: {user_data['desc']}",
-        reply_markup=admin_main_menu()
-    )
+@dp.message(AdminStates.add_cat_name)
+async def save_cat(message: types.Message, state: FSMContext):
+    # ক্যাটাগরি সেভ করলেই Firebase অটোমেটিক 'categories' কালেকশন তৈরি করবে
+    new_cat = db.collection('categories').add({'name': message.text})
+    await message.answer(f"✅ ক্যাটাগরি '{message.text}' তৈরি হয়েছে!", reply_markup=admin_main_menu())
     await state.clear()
 
-# --- Health Check for Render ---
-async def handle_health_check(request):
-    return web.Response(text="Bot is Online!")
+@dp.message(F.text == "➕ Add Product")
+async def admin_add_prod(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    await message.answer("প্রোডাক্টের নাম লিখুন:")
+    await state.set_state(AdminStates.add_prod_name)
 
+@dp.message(AdminStates.add_prod_name)
+async def proc_p_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await message.answer("প্রোডাক্টের দাম লিখুন (শুধু সংখ্যা):")
+    await state.set_state(AdminStates.add_prod_price)
+
+@dp.message(AdminStates.add_prod_price)
+async def proc_p_price(message: types.Message, state: FSMContext):
+    await state.update_data(price=message.text)
+    await message.answer("কোন ক্যাটাগরিতে যোগ করবেন? ক্যাটাগরির ID লিখুন (অথবা ক্যাটাগরি লিস্ট দেখতে 'List' লিখুন):")
+    await state.set_state(AdminStates.add_prod_cat_id)
+
+@dp.message(AdminStates.add_prod_cat_id)
+async def proc_p_cat(message: types.Message, state: FSMContext):
+    await state.update_data(cat_id=message.text)
+    await message.answer("ডেলিভারি কন্টেন্ট (লিঙ্ক বা টেক্সট) লিখুন:")
+    await state.set_state(AdminStates.add_prod_content)
+
+@dp.message(AdminStates.add_prod_content)
+async def proc_p_content(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    # প্রোডাক্ট সেভ করলেই Firebase অটোমেটিক 'products' কালেকশন তৈরি করবে
+    db.collection('products').add({
+        'name': data['name'],
+        'price': data['price'],
+        'category_id': data['cat_id'],
+        'content': message.text
+    })
+    await message.answer("✅ প্রোডাক্ট সফলভাবে যোগ হয়েছে!", reply_markup=admin_main_menu())
+    await state.clear()
+
+# --- Render Health Check (For 24/7) ---
 async def start_web_server():
     app = web.Application()
-    app.router.add_get('/', handle_health_check)
+    app.router.add_get('/', lambda r: web.Response(text="Bot is Alive!"))
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
     await web.TCPSite(runner, '0.0.0.0', port).start()
 
 async def main():
-    await start_web_server()
-    print("🚀 Bot is starting...")
+    await initialize_database() # ডাটাবেস অটো-চেক
+    await start_web_server()    # ২৪ ঘণ্টা অন রাখার জন্য
+    print("🚀 Bot is running...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import asyncio
-    if not API_TOKEN:
-        print("❌ ERROR: BOT_TOKEN missing!")
-    else:
-        asyncio.run(main())
+    asyncio.run(main())
