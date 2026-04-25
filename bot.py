@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiohttp import web
 import firebase_admin
 from firebase_admin import credentials, firestore
+
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO)
 API_TOKEN = os.getenv('BOT_TOKEN')
@@ -17,19 +18,20 @@ ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
 
 # --- Firebase Setup ---
 try:
+    # পরিবেশ ভেরিয়েবল থেকে JSON স্ট্রিংটি লোড করা হচ্ছে
     service_account_info = json.loads(os.getenv('FIREBASE_SERVICE_ACCOUNT'))
     cred = credentials.Certificate(service_account_info)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
-    print("✅ Firebase Connected!")
+    print("✅ Firebase Connected Successfully!")
 except Exception as e:
-    print(f"❌ Firebase Error: {e}")
+    print(f"❌ Firebase Connection Error: {e}")
     exit(1)
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# --- FSM States ---
+# --- FSM States (প্রসেস কন্ট্রোল করার জন্য) ---
 class AdminStates(StatesGroup):
     set_welcome = State()
     set_help = State()
@@ -69,6 +71,22 @@ def cancel_kb():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Cancel/Back")]], resize_keyboard=True)
 
 # --- Helper Functions ---
+
+async def initialize_db():
+    """বট চালু হওয়ার সময় ডাটাবেস চেক করবে"""
+    print("⚙️ Initializing Database...")
+    settings_ref = db.collection('settings')
+    defaults = {
+        'welcome': "👋 স্বাগতম! আমাদের ডিজিটাল শপে আপনাকে স্বাগতম।\nনিচের মেনু থেকে অপশন সিলেক্ট করুন:",
+        'help': "ℹ️ Help: Select product and pay via Bkash/Nagad.",
+        'support': "💬 Support: Contact @AdminUsername",
+        'referral': "🎁 Referral: Invite friends using your link!"
+    }
+    for key, text in defaults.items():
+        if not settings_ref.document(key).get().exists:
+            settings_ref.document(key).set({'text': text})
+    print("✅ Database Ready!")
+
 async def get_setting(key):
     doc = db.collection('settings').document(key).get()
     return doc.to_dict()['text'] if doc.exists else ""
@@ -79,6 +97,7 @@ async def get_setting(key):
 async def cmd_start(message: types.Message):
     user_ref = db.collection('users').document(str(message.from_user.id))
     user_ref.set({'username': message.from_user.username, 'id': message.from_user.id}, merge=True)
+    
     welcome_text = await get_setting('welcome')
     if message.from_user.id == ADMIN_ID:
         await message.answer("👑 Welcome Admin!", reply_markup=admin_main_menu())
@@ -93,6 +112,7 @@ async def show_categories(message: types.Message):
     for doc in cats_ref:
         found = True
         buttons.append([InlineKeyboardButton(text=doc.to_dict()['name'], callback_data=f"cat_{doc.id}")])
+    
     if not found:
         await message.answer("দুঃখিত, বর্তমানে কোনো ক্যাটাগরি নেই।")
         return
@@ -108,6 +128,7 @@ async def show_products(callback_query: types.CallbackQuery):
         found = True
         p = doc.to_dict()
         buttons.append([InlineKeyboardButton(text=f"{p['name']} - {p['price']}৳", callback_data=f"buy_{doc.id}")])
+    
     if not found:
         await callback_query.answer("এই ক্যাটাগরিতে কোনো প্রোডাক্ট নেই!", show_alert=True)
     else:
@@ -120,7 +141,10 @@ async def buy_process(callback_query: types.CallbackQuery, state: FSMContext):
     if not prod_doc.exists: return
     p = prod_doc.to_dict()
     await state.update_data(target_prod_id=prod_id, target_prod_name=p['name'], target_prod_price=p['price'])
-    instr = f"💳 **Payment Instruction**\n\nProduct: {p['name']}\nAmount: {p['price']}৳\n\nBkash/Nagad: `01XXXXXXXXX`\n\n✅ পেমেন্ট করার পর আপনার **Transaction ID** লিখে এখানে পাঠান।"
+    
+    instr = (f"💳 **Payment Instruction**\n\nProduct: {p['name']}\nAmount: {p['price']}৳\n\n"
+             f"Bkash/Nagad: `01XXXXXXXXX`\n\n"
+             f"✅ পেমেন্ট করার পর আপনার **Transaction ID** লিখে এখানে পাঠান।")
     await callback_query.message.answer(instr, parse_mode="Markdown")
     await callback_query.answer()
     await state.set_state(UserStates.submitting_trx)
@@ -129,10 +153,18 @@ async def buy_process(callback_query: types.CallbackQuery, state: FSMContext):
 async def handle_trx(message: types.Message, state: FSMContext):
     data = await state.get_data()
     trx_id = message.text
-    order_data = {"user_id": message.from_user.id, "user_name": message.from_user.full_name, "product_id": data['target_prod_id'], "product_name": data['target_prod_name'], "price": data['target_prod_price'], "trx_id": trx_id, "status": "pending"}
+    order_data = {
+        "user_id": message.from_user.id, "user_name": message.from_user.full_name,
+        "product_id": data['target_prod_id'], "product_name": data['target_prod_name'],
+        "price": data['target_prod_price'], "trx_id": trx_id, "status": "pending"
+    }
     new_order = db.collection('orders').add(order_data)
     await message.answer("⏳ পেমেন্ট যাচাই হচ্ছে...")
-    admin_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{new_order[1].id}"), InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{new_order[1].id}")]])
+    
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{new_order[1].id}"),
+         InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{new_order[1].id}")]
+    ])
     await bot.send_message(ADMIN_ID, f"🆕 **New Order!**\n\n👤 User: {message.from_user.full_name}\n📦 Product: {data['target_prod_name']}\n💰 Price: {data['target_prod_price']}৳\n🧾 TRX ID: {trx_id}", reply_markup=admin_kb, parse_mode="Markdown")
     await state.clear()
 
@@ -144,8 +176,8 @@ async def my_orders(message: types.Message):
     for doc in orders_ref:
         found = True
         o = doc.to_dict()
-        status_emoji = "✅" if o['status']=='approved' else "⏳" if o['status']=='pending' else "❌"
-        text += f"{status_emoji} {o['product_name']} - {o['status']}\n"
+        emoji = "✅" if o['status']=='approved' else "⏳" if o['status']=='pending' else "❌"
+        text += f"{emoji} {o['product_name']} - {o['status']}\n"
     await message.answer(text if found else "কোনো অর্ডার নেই।" , parse_mode="Markdown")
 
 @dp.message(F.text == "🎁 Referral")
@@ -364,4 +396,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
