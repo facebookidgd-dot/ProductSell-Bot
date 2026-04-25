@@ -22,7 +22,7 @@ try:
     cred = credentials.Certificate(service_account_info)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
-    print("✅ Firebase Connected Successfully!")
+    print("✅ Firebase Connected!")
 except Exception as e:
     print(f"❌ Firebase Error: {e}")
     exit(1)
@@ -44,12 +44,7 @@ class AdminStates(StatesGroup):
     broadcast = State()
     del_cat_id = State()
     del_prod_id = State()
-    # Edit States
     edit_text_key = State()
-    edit_cat_id = State()
-    edit_prod_id = State()
-    edit_prod_type = State() # name, price, or content
-    edit_prod_val = State()
 
 class UserStates(StatesGroup):
     submitting_trx = State()
@@ -103,6 +98,17 @@ async def get_safe_count(collection_name):
         return count_query.value
     except Exception:
         return len(list(db.collection(collection_name).stream()))
+
+# --- Handlers: Global Cancel (The Fix) ---
+
+@dp.message(F.text == "❌ Cancel/Back")
+async def global_cancel(message: types.Message, state: FSMContext):
+    """যেকোনো অবস্থায় ইউজার বা এডমিন ক্যানসেল করলে এটি কাজ করবে"""
+    await state.clear()
+    if message.from_user.id == ADMIN_ID:
+        await message.answer("🔙 Admin Menu:", reply_markup=admin_main_menu())
+    else:
+        await message.answer("🔙 Main Menu:", reply_markup=user_main_menu())
 
 # --- Handlers: User Side ---
 
@@ -160,10 +166,6 @@ async def buy_process(callback_query: types.CallbackQuery, state: FSMContext):
 
 @dp.message(UserStates.submitting_trx)
 async def handle_trx(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=user_main_menu())
-        return
     data = await state.get_data()
     trx_id = message.text
     order_data = {"user_id": message.from_user.id, "user_name": message.from_user.full_name, "product_id": data['target_prod_id'], "product_name": data['target_prod_name'], "price": data['target_prod_price'], "trx_id": trx_id, "status": "pending"}
@@ -274,30 +276,18 @@ async def admin_add_prod_start(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.add_prod_name)
 async def proc_p_name(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
     await state.update_data(name=message.text)
     await message.answer("দাম লিখুন (শুধু সংখ্যা):")
     await state.set_state(AdminStates.add_prod_price)
 
 @dp.message(AdminStates.add_prod_price)
 async def proc_p_price(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
     await state.update_data(price=message.text)
     await message.answer("ক্যাটাগরির ID লিখুন (অথবা লিস্ট দেখতে 'List' লিখুন):")
     await state.set_state(AdminStates.add_prod_cat_id)
 
 @dp.message(AdminStates.add_prod_cat_id)
 async def proc_p_cat(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
     if message.text.lower() == 'list':
         cats_ref = db.collection('categories').stream()
         msg = "📂 **Current Categories & IDs:**\n\n"
@@ -312,10 +302,6 @@ async def proc_p_cat(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.add_prod_content)
 async def proc_p_content(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
     data = await state.get_data()
     res = db.collection('products').add({
         'name': data['name'], 'price': data['price'], 'category_id': data['cat_id'], 'content': message.text
@@ -340,8 +326,6 @@ async def perform_del_prod(callback_query: types.CallbackQuery):
     db.collection('products').document(callback_query.data.split("_")[1]).delete()
     await callback_query.message.edit_text("✅ প্রোডাক্ট ডিলিট হয়েছে!")
 
-# --- Admin: Edit All (Dynamic System) ---
-
 @dp.message(F.text == "📝 Edit Texts")
 async def admin_edit_menu(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
@@ -356,16 +340,12 @@ async def admin_edit_menu(message: types.Message):
 @dp.callback_query(F.data.startswith("edit_"))
 async def admin_edit_start(callback_query: types.CallbackQuery, state: FSMContext):
     key = callback_query.data.split("_")[1]
-    await callback_query.message.answer(f"নতুন {key} টেক্সটটি লিখুন (অথবা Cancel করুন):", reply_markup=cancel_kb())
+    await callback_query.message.answer(f"নতুন {key} টেক্সটটি লিখুন:", reply_markup=cancel_kb())
     await state.update_data(edit_key=key)
     await state.set_state(AdminStates.set_welcome)
 
 @dp.message(AdminStates.set_welcome)
 async def save_edited_text(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
     data = await state.get_data()
     key = data.get('edit_key')
     if not key: return
@@ -373,110 +353,6 @@ async def save_edited_text(message: types.Message, state: FSMContext):
     await message.answer(f"✅ {key} আপডেট হয়েছে!", reply_markup=admin_main_menu())
     await state.clear()
 
-# --- Admin: Edit Category & Product ---
-
-@dp.message(F.text == "Edit Category")
-async def admin_edit_cat_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
-    cats_ref = db.collection('categories').stream()
-    buttons = []
-    for doc in cats_ref:
-        buttons.append([InlineKeyboardButton(text=f"✏️ {doc.to_dict()['name']}", callback_data=f"editcat_{doc.id}")])
-    if not buttons: await message.answer("কোনো ক্যাটাগরি নেই।"); return
-    await message.answer("কোন ক্যাটাগরি এডিট করবেন?", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-
-@dp.callback_query(F.data.startswith("editcat_"))
-async def admin_edit_cat_start_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    cat_id = callback_query.data.split("_")[1]
-    await state.update_data(target_id=cat_id)
-    await callback_query.message.answer("নতুন ক্যাটাগরির নাম লিখুন:", reply_markup=cancel_kb())
-    await state.set_state(AdminStates.add_cat_name) # Reuse same state
-
-@dp.callback_query(F.data.startswith("editprod_"))
-async def admin_edit_prod_start(callback_query: types.CallbackQuery, state: FSMContext):
-    prod_id = callback_query.data.split("_")[1]
-    await state.update_data(target_id=prod_id)
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Edit Name", callback_data="edit_p_name")],
-        [InlineKeyboardButton(text="Edit Price", callback_data="edit_p_price")],
-        [InlineKeyboardButton(text="Edit Content", callback_data="edit_p_content")]
-    ])
-    await callback_query.message.answer("কি পরিবর্তন করবেন?", reply_markup=kb)
-
-@dp.callback_query(F.data.startswith("edit_p_"))
-async def admin_edit_prod_type(callback_query: types.CallbackQuery, state: FSMContext):
-    p_type = callback_query.data.split("_")[2]
-    await state.update_data(edit_type=p_type)
-    await callback_query.message.answer(f"নতুন {p_type} লিখুন:", reply_markup=cancel_kb())
-    if p_type == 'name': await state.set_state(AdminStates.add_prod_name)
-    elif p_type == 'price': await state.set_state(AdminStates.add_prod_price)
-    elif p_type == 'content': await state.set_state(AdminStates.add_prod_content)
-
-# (Note: I've integrated the actual saving logic into the existing add_prod handlers to keep it clean)
-# Re-routing add_prod handlers to handle both NEW and EDIT
-@dp.message(AdminStates.add_prod_name)
-async def proc_p_name(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
-    await state.update_data(name=message.text)
-    await message.answer("দাম লিখুন (শুধু সংখ্যা):")
-    await state.set_state(AdminStates.add_prod_price)
-
-@dp.message(AdminStates.add_prod_price)
-async def proc_p_price(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
-    await state.update_data(price=message.text)
-    await message.answer("ক্যাটাগরির ID লিখুন (অথবা লিস্ট দেখতে 'List' লিখুন):")
-    await state.set_state(AdminStates.add_prod_cat_id)
-
-@dp.message(AdminStates.add_prod_cat_id)
-async def proc_p_cat(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
-    if message.text.lower() == 'list':
-        cats_ref = db.collection('categories').stream()
-        msg = "📂 **Current Categories & IDs:**\n\n"
-        for doc in cats_ref:
-            msg += f"🔹 {doc.to_dict()['name']} ➔ `{doc.id}`\n"
-        await message.answer(msg, parse_mode="Markdown")
-        await proc_p_cat(message, state)
-        return
-    await state.update_data(cat_id=message.text)
-    await message.answer("ডেলিভারি কন্টেন্ট (লিঙ্ক বা টেক্সট) লিখুন:")
-    await state.set_state(AdminStates.add_prod_content)
-
-@dp.message(AdminStates.add_prod_content)
-async def proc_p_content(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
-    data = await state.get_data()
-    # Check if we are editing or adding new
-    if 'target_id' in data: # EDIT MODE
-        target_id = data['target_id']
-        db.collection('products').document(target_id).update({
-            'name': data.get('name', data.get('old_name')), # Simplified logic
-            'price': data.get('price', data.get('old_price')),
-            'content': message.text
-        })
-        await message.answer("✅ Product Updated!", reply_markup=admin_main_menu())
-    else: # ADD MODE
-        res = db.collection('products').add({
-            'name': data['name'], 'price': data['price'], 'category_id': data['cat_id'], 'content': message.text
-        })
-        await message.answer(f"✅ Product Added!\n🆔 ID: {res[1].id}", reply_markup=admin_main_menu())
-    await state.clear()
-
-# Admin: Broadcast
 @dp.message(F.text == "📢 Broadcast")
 async def admin_broadcast_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
@@ -485,10 +361,6 @@ async def admin_broadcast_start(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.broadcast)
 async def send_broadcast(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
     users_ref = db.collection('users').stream()
     count = 0
     for user in users_ref:
@@ -499,7 +371,6 @@ async def send_broadcast(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Broadcast Sent to {count} users!", reply_markup=admin_main_menu())
     await state.clear()
 
-# Admin: Stats
 @dp.message(F.text == "📊 Stats")
 async def admin_stats(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
