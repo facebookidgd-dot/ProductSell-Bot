@@ -13,20 +13,18 @@ from firebase_admin import credentials, firestore
 
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO)
-
-# Environment Variables (Render এ অবশ্যই সেট করবেন)
 API_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
 
-# --- Firebase Initialization (Handles JSON String directly) ---
+# --- Firebase Setup ---
 try:
     service_account_info = json.loads(os.getenv('FIREBASE_SERVICE_ACCOUNT'))
     cred = credentials.Certificate(service_account_info)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
-    print("✅ Firebase Connected Successfully!")
+    print("✅ Firebase Connected!")
 except Exception as e:
-    print(f"❌ Firebase Connection Error: {e}")
+    print(f"❌ Firebase Error: {e}")
     exit(1)
 
 bot = Bot(token=API_TOKEN)
@@ -41,6 +39,8 @@ class AdminStates(StatesGroup):
     add_prod_cat_id = State()
     add_prod_content = State()
     broadcast = State()
+    del_cat_id = State()
+    del_prod_id = State()
 
 class UserStates(StatesGroup):
     submitting_trx = State()
@@ -50,19 +50,22 @@ class UserStates(StatesGroup):
 def user_main_menu():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="🛒 Products"), KeyboardButton(text="📦 My Orders")],
-        [KeyboardButton(text="🎁 Referral"), KeyboardButton(text="💬 Support")]
+        [KeyboardButton(text="🎁 Referral"), KeyboardButton(text="💬 Support")],
+        [KeyboardButton(text="ℹ️ Help")]
     ], resize_keyboard=True)
 
 def admin_main_menu():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="➕ Add Category"), KeyboardButton(text="➕ Add Product")],
+        [KeyboardButton(text="🗑 Delete Category"), KeyboardButton(text="🗑 Delete Product")],
         [KeyboardButton(text="📝 Change Welcome"), KeyboardButton(text="📢 Broadcast")],
-        [KeyboardButton(text="🔙 Back to User Menu")]
+        [KeyboardButton(text="📊 Stats"), KeyboardButton(text="🔙 Back to User Menu")]
     ], resize_keyboard=True)
 
-# --- Database Initialization (Auto-creation) ---
+# --- Database Initialization ---
 async def initialize_db():
     print("⚙️ Initializing Database...")
+    # Welcome message setup
     doc_ref = db.collection('settings').document('welcome')
     doc = doc_ref.get()
     if not doc.exists:
@@ -73,6 +76,10 @@ async def initialize_db():
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # ইউজারকে ডাটাবেসে সেভ করা (Referral সিস্টেমের জন্য)
+    user_ref = db.collection('users').document(str(message.from_user.id))
+    user_ref.set({'username': message.from_user.username, 'id': message.from_user.id}, merge=True)
+
     doc = db.collection('settings').document('welcome').get()
     welcome_text = doc.to_dict()['text'] if doc.exists else "Welcome!"
     
@@ -97,7 +104,7 @@ async def show_categories(message: types.Message):
     await message.answer("ক্যাটেগরি সিলেক্ট করুন:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @dp.callback_query(F.data.startswith("cat_"))
-async def show_products_in_cat(callback_query: types.CallbackQuery):
+async def show_products(callback_query: types.CallbackQuery):
     cat_id = callback_query.data.split("_")[1]
     prods_ref = db.collection('products').where("category_id", "==", cat_id).stream()
     
@@ -140,7 +147,6 @@ async def handle_trx(message: types.Message, state: FSMContext):
     data = await state.get_data()
     trx_id = message.text
     
-    # Create Order in Firebase
     order_data = {
         "user_id": message.from_user.id,
         "user_name": message.from_user.full_name,
@@ -155,7 +161,6 @@ async def handle_trx(message: types.Message, state: FSMContext):
 
     await message.answer("⏳ পেমেন্ট যাচাই হচ্ছে... এডমিন অ্যাপ্রুভ করলে আপনি প্রোডাক্ট পাবেন।")
     
-    # Notify Admin
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{order_id}"),
          InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{order_id}")]
@@ -163,26 +168,50 @@ async def handle_trx(message: types.Message, state: FSMContext):
     await bot.send_message(ADMIN_ID, f"🆕 **New Order!**\n\n👤 User: {message.from_user.full_name}\n📦 Product: {data['target_prod_name']}\n💰 Price: {data['target_price']}৳\n🧾 TRX ID: {trx_id}", reply_markup=admin_kb, parse_mode="Markdown")
     await state.clear()
 
-# --- Admin Handlers ---
+@dp.message(F.text == "📦 My Orders")
+async def my_orders(message: types.Message):
+    orders_ref = db.collection('orders').where("user_id", "==", message.from_user.id).stream()
+    text = "📦 **আপনার অর্ডারের তালিকা:**\n\n"
+    found = False
+    for doc in orders_ref:
+        found = True
+        o = doc.to_dict()
+        status_emoji = "✅" if o['status'] == 'approved' else "⏳" if o['status'] == 'pending' else "❌"
+        text += f"{status_emoji} {o['product_name']} - {o['status']}\n"
+    
+    if not found:
+        await message.answer("আপনার কোনো অর্ডার নেই।")
+    else:
+        await message.answer(text, parse_mode="Markdown")
+
+@dp.message(F.text == "🎁 Referral")
+async def show_referral(message: types.Message):
+    ref_link = f"https://t.me/YourBotUsername?start={message.from_user.id}"
+    await message.answer(f"🔗 Your Referral Link:\n{ref_link}\n\nInvite friends and earn rewards!")
+
+@dp.message(F.text == "💬 Support")
+async def show_support(message: types.Message):
+    await message.answer("Contact Support: @YourAdminUsername")
+
+@dp.message(F.text == "ℹ️ Help")
+async def show_help(message: types.Message):
+    await message.answer("How to use:\n1. Select Product\n2. Pay via Bkash/Nagad\n3. Submit TRX ID\n4. Get instant delivery!")
+
+# --- Handlers: Admin Side ---
 
 @dp.callback_query(F.data.startswith("app_"))
 async def admin_approve(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != ADMIN_ID: return
     order_id = callback_query.data.split("_")[1]
-    
     order_ref = db.collection('orders').document(order_id)
     order = order_ref.get()
     if not order.exists: return
     
     order_data = order.to_dict()
-    # Get product content
     prod_doc = db.collection('products').document(order_data['product_id']).get()
     content = prod_doc.to_dict()['content']
 
-    # Update Order Status
     order_ref.update({"status": "approved"})
-
-    # Notify User
     await bot.send_message(order_data['user_id'], f"✅ **Payment Confirmed!**\n\n📦 Product: {order_data['product_name']}\n🔗 Content: `{content}`", parse_mode="Markdown")
     await callback_query.message.edit_text(f"✅ Order {order_id} Approved!")
 
@@ -195,9 +224,10 @@ async def admin_reject(callback_query: types.CallbackQuery):
     if not order.exists: return
     
     order_ref.update({"status": "rejected"})
-    await bot.send_message(order['user_id'], "❌ আপনার পেমেন্টটি রিজেক্ট করা হয়েছে। সাপোর্ট টিমে যোগাযোগ করুন।")
+    await bot.send_message(order['user_id'], "❌ আপনার পেমেন্টটি রিজেক্ট করা হয়েছে।")
     await callback_query.message.edit_text(f"❌ Order {order_id} Rejected!")
 
+# Admin: Add Category
 @dp.message(F.text == "➕ Add Category")
 async def add_cat_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
@@ -206,10 +236,32 @@ async def add_cat_start(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.add_cat_name)
 async def save_cat(message: types.Message, state: FSMContext):
-    db.collection('categories').add({'name': message.text})
-    await message.answer("✅ ক্যাটাগরি তৈরি হয়েছে!", reply_markup=admin_main_menu())
+    new_cat = db.collection('categories').add({'name': message.text})
+    await message.answer(f"✅ ক্যাটাগরি তৈরি হয়েছে!", reply_markup=admin_main_menu())
     await state.clear()
 
+# Admin: Delete Category
+@dp.message(F.text == "🗑 Delete Category")
+async def del_cat_start(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    cats_ref = db.collection('categories').stream()
+    buttons = []
+    for doc in cats_ref:
+        buttons.append([InlineKeyboardButton(text=f"❌ {doc.to_dict()['name']}", callback_data=f"delcat_{doc.id}")])
+    
+    if not buttons:
+        await message.answer("কোনো ক্যাটাগরি নেই।")
+        return
+    await message.answer("যে ক্যাটাগরি ডিলিট করতে চান সেটি সিলেক্ট করুন:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data.startswith("delcat_"))
+async def perform_del_cat(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID: return
+    cat_id = callback_query.data.split("_")[1]
+    db.collection('categories').document(cat_id).delete()
+    await callback_query.message.edit_text("✅ ক্যাটাগরি ডিলিট হয়েছে!")
+
+# Admin: Add Product
 @dp.message(F.text == "➕ Add Product")
 async def add_prod_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
@@ -246,6 +298,29 @@ async def proc_p_content(message: types.Message, state: FSMContext):
     await message.answer("✅ প্রোডাক্ট যোগ হয়েছে!", reply_markup=admin_main_menu())
     await state.clear()
 
+# Admin: Delete Product
+@dp.message(F.text == "🗑 Delete Product")
+async def del_prod_start(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    prods_ref = db.collection('products').stream()
+    buttons = []
+    for doc in prods_ref:
+        p = doc.to_dict()
+        buttons.append([InlineKeyboardButton(text=f"❌ {p['name']}", callback_data=f"delprod_{doc.id}")])
+    
+    if not buttons:
+        await message.answer("কোনো প্রোডাক্ট নেই।")
+        return
+    await message.answer("যে প্রোডাক্ট ডিলিট করতে চান সেটি সিলেক্ট করুন:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data.startswith("delprod_"))
+async def perform_del_prod(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != ADMIN_ID: return
+    prod_id = callback_query.data.split("_")[1]
+    db.collection('products').document(prod_id).delete()
+    await callback_query.message.edit_text("✅ প্রোডাক্ট ডিলিট হয়েছে!")
+
+# Admin: Change Welcome
 @dp.message(F.text == "📝 Change Welcome")
 async def admin_welcome_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
@@ -257,6 +332,34 @@ async def save_welcome(message: types.Message, state: FSMContext):
     db.collection('settings').document('welcome').set({'text': message.text})
     await message.answer("✅ ওয়েলকাম মেসেজ আপডেট হয়েছে!", reply_markup=admin_main_menu())
     await state.clear()
+
+# Admin: Broadcast
+@dp.message(F.text == "📢 Broadcast")
+async def admin_broadcast_start(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    await message.answer("সব ইউজারকে যে মেসেজটি পাঠাতে চান সেটি লিখুন:")
+    await state.set_state(AdminStates.broadcast)
+
+@dp.message(AdminStates.broadcast)
+async def send_broadcast(message: types.Message, state: FSMContext):
+    users_ref = db.collection('users').stream()
+    count = 0
+    for user in users_ref:
+        try:
+            await bot.send_message(user.id, message.text)
+            count += 1
+        except:
+            pass
+    await message.answer(f"✅ Broadcast Sent to {count} users!", reply_markup=admin_main_menu())
+    await state.clear()
+
+# Admin: Stats
+@dp.message(F.text == "📊 Stats")
+async def admin_stats(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    users_count = db.collection('users').count().get()[0].value
+    orders_count = db.collection('orders').count().get()[0].value
+    await message.answer(f"📊 **Bot Statistics**\n\n👥 Total Users: {users_count}\n📦 Total Orders: {orders_count}", parse_mode="Markdown", reply_markup=admin_main_menu())
 
 @dp.message(F.text == "🔙 Back to User Menu")
 async def back_to_user(message: types.Message):
@@ -279,10 +382,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import traceback  # এটি এরর দেখার জন্য প্রয়োজন
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        print("❌ --- CRITICAL ERROR FOUND --- ❌")
-        traceback.print_exc()  # এটি আসল এররটি লগে প্রিন্ট করবে
-        print("---------------------------------")
+    asyncio.run(main())
