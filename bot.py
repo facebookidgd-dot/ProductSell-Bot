@@ -44,12 +44,7 @@ class AdminStates(StatesGroup):
     broadcast = State()
     del_cat_id = State()
     del_prod_id = State()
-    # Edit States
     edit_text_key = State()
-    edit_cat_id = State()
-    edit_prod_id = State()
-    edit_prod_type = State()
-    edit_prod_val = State()
 
 class UserStates(StatesGroup):
     submitting_trx = State()
@@ -58,9 +53,9 @@ class UserStates(StatesGroup):
 
 def user_main_menu():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="🛒 Products"), KeyboardButton(text="📦 My Orders")],
-        [KeyboardButton(text="🎁 Referral"), KeyboardButton(text="💬 Support")],
-        [KeyboardButton(text="ℹ️ Help")]
+        [KeyboardButton(text="🛒 Products"), KeyboardButton(text="🌟 All Products")],
+        [KeyboardButton(text="📦 My Orders"), KeyboardButton(text="🎁 Referral")],
+        [KeyboardButton(text="💬 Support"), KeyboardButton(text="ℹ️ Help")]
     ], resize_keyboard=True)
 
 def admin_main_menu():
@@ -138,6 +133,21 @@ async def show_categories(message: types.Message):
         await message.answer("দুঃখিত, বর্তমানে কোনো ক্যাটাগরি নেই।")
         return
     await message.answer("ক্যাটেগরি সিলেক্ট করুন:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.message(F.text == "🌟 All Products")
+async def show_all_products(message: types.Message):
+    prods_ref = db.collection('products').stream()
+    buttons = []
+    found = False
+    for doc in prods_ref:
+        found = True
+        p = doc.to_dict()
+        buttons.append([InlineKeyboardButton(text=f"{p['name']} - {p['price']}৳", callback_data=f"buy_{doc.id}")])
+    
+    if not found:
+        await message.answer("বর্তমানে কোনো প্রোডাক্ট নেই।")
+        return
+    await message.answer("সকল প্রোডাক্টের তালিকা:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @dp.callback_query(F.data.startswith("cat_"))
 async def show_products(callback_query: types.CallbackQuery):
@@ -330,8 +340,6 @@ async def perform_del_prod(callback_query: types.CallbackQuery):
     db.collection('products').document(callback_query.data.split("_")[1]).delete()
     await callback_query.message.edit_text("✅ প্রোডাক্ট ডিলিট হয়েছে!")
 
-# --- Admin: Edit System ---
-
 @dp.message(F.text == "📝 Edit Texts")
 async def admin_edit_menu(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
@@ -359,99 +367,6 @@ async def save_edited_text(message: types.Message, state: FSMContext):
     await message.answer(f"✅ {key} আপডেট হয়েছে!", reply_markup=admin_main_menu())
     await state.clear()
 
-# --- Admin: Edit Category & Product (New) ---
-
-@dp.message(F.text == "✏️ Edit Category")
-async def admin_edit_cat_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
-    cats_ref = db.collection('categories').stream()
-    buttons = []
-    for doc in cats_ref:
-        buttons.append([InlineKeyboardButton(text=f"✏️ {doc.to_dict()['name']}", callback_data=f"editcat_{doc.id}")])
-    if not buttons: await message.answer("কোনো ক্যাটাগরি নেই।"); return
-    await message.answer("কোন ক্যাটাগরি এডিট করবেন?", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-
-@dp.callback_query(F.data.startswith("editcat_"))
-async def admin_edit_cat_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    cat_id = callback_query.data.split("_")[1]
-    await state.update_data(target_id=cat_id)
-    await callback_query.message.answer("নতুন ক্যাটাগরির নাম লিখুন:", reply_markup=cancel_kb())
-    await state.set_state(AdminStates.add_cat_name)
-
-@dp.message(F.text == "✏️ Edit Product")
-async def admin_edit_prod_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
-    prods_ref = db.collection('products').stream()
-    buttons = []
-    for doc in prods_ref:
-        p = doc.to_dict()
-        buttons.append([InlineKeyboardButton(text=f"✏️ {p['name']}", callback_data=f"editprod_{doc.id}")])
-    if not buttons: await message.answer("কোনো প্রোডাক্ট নেই।"); return
-    await message.answer("কোন প্রোডাক্ট এডিট করবেন?", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-
-@dp.callback_query(F.data.startswith("editprod_"))
-async def admin_edit_prod_type(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.from_user.id != ADMIN_ID: return
-    prod_id = callback_query.data.split("_")[1]
-    await state.update_data(target_id=prod_id)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Edit Name", callback_data="upd_p_name")],
-        [InlineKeyboardButton(text="Edit Price", callback_data="upd_p_price")],
-        [InlineKeyboardButton(text="Edit Content", callback_data="upd_p_content")]
-    ])
-    await callback_query.message.edit_text("কি পরিবর্তন করবেন?", reply_markup=kb)
-
-@dp.callback_query(F.data.startswith("upd_p_"))
-async def admin_edit_prod_field(callback_query: types.CallbackQuery, state: FSMContext):
-    field = callback_query.data.split("_")[2]
-    await state.update_data(edit_field=field)
-    await callback_query.message.answer(f"নতুন {field} লিখুন:", reply_markup=cancel_kb())
-    if field == 'name': await state.set_state(AdminStates.add_prod_name)
-    elif field == 'price': await state.set_state(AdminStates.add_prod_price)
-    elif field == 'content': await state.set_state(AdminStates.add_prod_content)
-
-@dp.message(AdminStates.add_prod_name)
-async def proc_p_name_edit(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
-    await state.update_data(name=message.text)
-    await message.answer("নতুন দাম লিখুন:")
-    await state.set_state(AdminStates.add_prod_price)
-
-@dp.message(AdminStates.add_prod_price)
-async def proc_p_price_edit(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
-    await state.update_data(price=message.text)
-    await message.answer("নতুন কন্টেন্ট লিখুন:")
-    await state.set_state(AdminStates.add_prod_content)
-
-@dp.message(AdminStates.add_prod_content)
-async def proc_p_content_edit(message: types.Message, state: FSMContext):
-    if message.text == "❌ Cancel/Back":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_main_menu())
-        return
-    data = await state.get_data()
-    target_id = data.get('target_id')
-    field = data.get('edit_field')
-    
-    if field == 'name':
-        db.collection('products').document(target_id).update({'name': message.text})
-    elif field == 'price':
-        db.collection('products').document(target_id).update({'price': message.text})
-    elif field == 'content':
-        db.collection('products').document(target_id).update({'content': message.text})
-    
-    await message.answer("✅ আপডেট হয়েছে!", reply_markup=admin_main_menu())
-    await state.clear()
-
-# --- Admin: Broadcast ---
-
 @dp.message(F.text == "📢 Broadcast")
 async def admin_broadcast_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
@@ -469,8 +384,6 @@ async def send_broadcast(message: types.Message, state: FSMContext):
         except: pass
     await message.answer(f"✅ Broadcast Sent to {count} users!", reply_markup=admin_main_menu())
     await state.clear()
-
-# --- Admin: Stats ---
 
 @dp.message(F.text == "📊 Stats")
 async def admin_stats(message: types.Message):
