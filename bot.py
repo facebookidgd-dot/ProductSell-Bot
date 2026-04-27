@@ -58,9 +58,9 @@ class UserStates(StatesGroup):
 
 def user_main_menu():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="🛒 Products"), KeyboardButton(text="🌟 All Products")],
-        [KeyboardButton(text="📦 My Orders"), KeyboardButton(text="🎁 Referral")],
-        [KeyboardButton(text="💬 Support"), KeyboardButton(text="ℹ️ Help")]
+        [KeyboardButton(text="🛒 Products"), KeyboardButton(text="📦 My Orders")],
+        [KeyboardButton(text="🎁 Referral"), KeyboardButton(text="💬 Support")],
+        [KeyboardButton(text="ℹ️ Help")]
     ], resize_keyboard=True)
 
 def admin_main_menu():
@@ -346,7 +346,7 @@ async def perform_del_prod(callback_query: types.CallbackQuery):
     db.collection('products').document(callback_query.data.split("_")[1]).delete()
     await callback_query.message.edit_text("✅ প্রোডাক্ট ডিলিট হয়েছে!")
 
-# --- Admin: Edit System (ULTIMATE VERSION) ---
+# --- Admin: Edit Everything (ULTIMATE VERSION) ---
 
 @dp.message(F.text == "📝 Edit Texts")
 async def admin_edit_menu(message: types.Message):
@@ -356,7 +356,7 @@ async def admin_edit_menu(message: types.Message):
         [InlineKeyboardButton(text="Set Help", callback_data="edit_help")],
         [InlineKeyboardButton(text="Set Support", callback_data="edit_support")],
         [InlineKeyboardButton(text="Set Referral", callback_data="edit_referral")],
-        [InlineKeyboardButton(text="Set Admin User", callback_data="edit_admin_username")]
+        [InlineKeyboardButton(text="Set Admin Username", callback_data="edit_admin_username")]
     ])
     await message.answer("কোনটি পরিবর্তন করবেন?", reply_markup=kb)
 
