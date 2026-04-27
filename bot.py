@@ -67,7 +67,7 @@ def admin_main_menu():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="➕ Add Category"), KeyboardButton(text="➕ Add Product")],
         [KeyboardButton(text="📂 View Categories"), KeyboardButton(text="🗑 Delete Category")],
-        [KeyboardButton(text="🗑 Delete Product"), KeyboardButton(text="📝 Edit Texts")],
+        [KeyboardButton(text="🗑 Delete Product"), KeyboardButton(text="✏️ Edit Everything")],
         [KeyboardButton(text="📢 Broadcast"), KeyboardButton(text="📊 Stats")],
         [KeyboardButton(text="🔙 Back to User Menu")]
     ], resize_keyboard=True)
@@ -85,7 +85,7 @@ async def initialize_db():
         'help': "ℹ️ Help: Select product and pay via Bkash/Nagad.",
         'support': "💬 Support: Contact @AdminUsername",
         'referral': "🎁 Referral: Invite friends using your link!",
-        'admin_username': "AdminUsername" # এটি রেফারেল লিঙ্কের জন্য
+        'admin_username': "AdminUsername"
     }
     for key, text in defaults.items():
         if not settings_ref.document(key).get().exists:
@@ -356,7 +356,7 @@ async def admin_edit_menu(message: types.Message):
         [InlineKeyboardButton(text="Set Help", callback_data="edit_help")],
         [InlineKeyboardButton(text="Set Support", callback_data="edit_support")],
         [InlineKeyboardButton(text="Set Referral", callback_data="edit_referral")],
-        [InlineKeyboardButton(text="Set Admin Username", callback_data="edit_admin_username")]
+        [InlineKeyboardButton(text="Set Admin User", callback_data="edit_admin_username")]
     ])
     await message.answer("কোনটি পরিবর্তন করবেন?", reply_markup=kb)
 
@@ -376,7 +376,7 @@ async def save_edited_text(message: types.Message, state: FSMContext):
     await message.answer(f"✅ {key} আপডেট হয়েছে!", reply_markup=admin_main_menu())
     await state.clear()
 
-# --- Admin: Edit Category & Product (ULTIMATE VERSION) ---
+# --- Admin: Edit Category & Product ---
 
 @dp.message(F.text == "✏️ Edit Category")
 async def admin_edit_cat_start(message: types.Message, state: FSMContext):
