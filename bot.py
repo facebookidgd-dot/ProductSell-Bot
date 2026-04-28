@@ -45,6 +45,13 @@ class AdminStates(StatesGroup):
     del_cat_id = State()
     del_prod_id = State()
     edit_text_key = State()
+    # New states for editing products
+    edit_prod_id = State()
+    edit_prod_name = State()
+    edit_prod_price = State()
+    edit_prod_content = State()
+    set_referral_username = State()
+
 
 class UserStates(StatesGroup):
     submitting_trx = State()
@@ -63,8 +70,8 @@ def admin_main_menu():
         [KeyboardButton(text="➕ Add Category"), KeyboardButton(text="➕ Add Product")],
         [KeyboardButton(text="📂 View Categories"), KeyboardButton(text="🗑 Delete Category")],
         [KeyboardButton(text="🗑 Delete Product"), KeyboardButton(text="📝 Edit Texts")],
-        [KeyboardButton(text="📢 Broadcast"), KeyboardButton(text="📊 Stats")],
-        [KeyboardButton(text="🔙 Back to User Menu")]
+        [KeyboardButton(text="👁️ View Products"), KeyboardButton(text="📢 Broadcast")],
+        [KeyboardButton(text="📊 Stats"), KeyboardButton(text="🔙 Back to User Menu")]
     ], resize_keyboard=True)
 
 def cancel_kb():
@@ -75,11 +82,14 @@ def cancel_kb():
 async def initialize_db():
     print("⚙️ Initializing Database...")
     settings_ref = db.collection('settings')
+    bot_info = await bot.get_me()
+    bot_username = bot_info.username
     defaults = {
         'welcome': "👋 স্বাগতম! আমাদের ডিজিটাল শপে আপনাকে স্বাগতম।\nনিচের মেনু থেকে অপশন সিলেক্ট করুন:",
         'help': "ℹ️ Help: Select product and pay via Bkash/Nagad.",
         'support': "💬 Support: Contact @AdminUsername",
-        'referral': "🎁 Referral: Invite friends using your link!"
+        'referral': "🎁 Referral: Invite friends using your link!",
+        'referral_username': bot_username
     }
     for key, text in defaults.items():
         if not settings_ref.document(key).get().exists:
@@ -189,7 +199,8 @@ async def my_orders(message: types.Message):
 
 @dp.message(F.text == "🎁 Referral")
 async def show_referral(message: types.Message):
-    ref_link = f"https://t.me/YourBotUsername?start={message.from_user.id}"
+    bot_username = await get_setting('referral_username')
+    ref_link = f"https://t.me/{bot_username}?start={message.from_user.id}"
     txt = await get_setting('referral')
     await message.answer(f"{txt}\n\n🔗 {ref_link}")
 
@@ -294,7 +305,7 @@ async def proc_p_cat(message: types.Message, state: FSMContext):
         for doc in cats_ref:
             msg += f"🔹 {doc.to_dict()['name']} ➔ `{doc.id}`\n"
         await message.answer(msg, parse_mode="Markdown")
-        await proc_p_cat(message, state)
+        # await proc_p_cat(message, state) # This line creates a recursion, it's better to just wait for the next message
         return
     await state.update_data(cat_id=message.text)
     await message.answer("ডেলিভারি কন্টেন্ট (লিঙ্ক বা টেক্সট) লিখুন:")
@@ -308,6 +319,55 @@ async def proc_p_content(message: types.Message, state: FSMContext):
     })
     await message.answer(f"✅ প্রোডাক্ট যোগ হয়েছে!\n🆔 ID: {res[1].id}", reply_markup=admin_main_menu())
     await state.clear()
+
+@dp.message(F.text == "👁️ View Products")
+async def admin_view_products(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    prods_ref = db.collection('products').stream()
+    found = False
+    for doc in prods_ref:
+        found = True
+        p = doc.to_dict()
+        text = f"**Name:** {p['name']}\n**Price:** {p['price']}৳\n**ID:** `{doc.id}`"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Edit", callback_data=f"editprod_{doc.id}")]
+        ])
+        await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    if not found:
+        await message.answer("কোনো প্রোডাক্ট নেই।")
+
+@dp.callback_query(F.data.startswith("editprod_"))
+async def admin_edit_prod_start(callback_query: types.CallbackQuery, state: FSMContext):
+    if callback_query.from_user.id != ADMIN_ID: return
+    prod_id = callback_query.data.split("_")[1]
+    await state.update_data(edit_prod_id=prod_id)
+    await callback_query.message.answer("প্রোডাক্টের নতুন নাম লিখুন:", reply_markup=cancel_kb())
+    await state.set_state(AdminStates.edit_prod_name)
+
+@dp.message(AdminStates.edit_prod_name)
+async def process_edit_prod_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await message.answer("নতুন দাম লিখুন:")
+    await state.set_state(AdminStates.edit_prod_price)
+
+@dp.message(AdminStates.edit_prod_price)
+async def process_edit_prod_price(message: types.Message, state: FSMContext):
+    await state.update_data(price=message.text)
+    await message.answer("নতুন ডেলিভারি কন্টেন্ট লিখুন:")
+    await state.set_state(AdminStates.edit_prod_content)
+
+@dp.message(AdminStates.edit_prod_content)
+async def process_edit_prod_content(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    prod_id = data.get('edit_prod_id')
+    db.collection('products').document(prod_id).update({
+        'name': data['name'],
+        'price': data['price'],
+        'content': message.text
+    })
+    await message.answer("✅ প্রোডাক্ট আপডেট হয়েছে!", reply_markup=admin_main_menu())
+    await state.clear()
+
 
 @dp.message(F.text == "🗑 Delete Product")
 async def admin_del_prod_start(message: types.Message, state: FSMContext):
@@ -333,18 +393,31 @@ async def admin_edit_menu(message: types.Message):
         [InlineKeyboardButton(text="Set Welcome", callback_data="edit_welcome")],
         [InlineKeyboardButton(text="Set Help", callback_data="edit_help")],
         [InlineKeyboardButton(text="Set Support", callback_data="edit_support")],
-        [InlineKeyboardButton(text="Set Referral", callback_data="edit_referral")]
+        [InlineKeyboardButton(text="Set Referral", callback_data="edit_referral")],
+        [InlineKeyboardButton(text="Set Referral Username", callback_data="edit_referral_username")]
     ])
     await message.answer("কোনটি পরিবর্তন করবেন?", reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("edit_"))
 async def admin_edit_start(callback_query: types.CallbackQuery, state: FSMContext):
-    key = callback_query.data.split("_")[1]
-    await callback_query.message.answer(f"নতুন {key} টেক্সটটি লিখুন:", reply_markup=cancel_kb())
+    key = callback_query.data.split("_", 1)[1]
+    current_text = await get_setting(key)
+    await callback_query.message.answer(f"**Old Text:**\n`{current_text}`\n\nনতুন {key} টেক্সটটি লিখুন:", reply_markup=cancel_kb(), parse_mode="Markdown")
     await state.update_data(edit_key=key)
-    await state.set_state(AdminStates.set_welcome)
+    if key == "referral_username":
+        await state.set_state(AdminStates.set_referral_username)
+    else:
+        await state.set_state(AdminStates.set_welcome) # Reusing this state for simplicity
 
-@dp.message(AdminStates.set_welcome)
+
+@dp.message(AdminStates.set_referral_username)
+async def save_referral_username(message: types.Message, state: FSMContext):
+    await db.collection('settings').document('referral_username').set({'text': message.text})
+    await message.answer("✅ Referral username আপডেট হয়েছে!", reply_markup=admin_main_menu())
+    await state.clear()
+
+
+@dp.message(AdminStates.set_welcome) # This state is reused for welcome, help, support, referral
 async def save_edited_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     key = data.get('edit_key')
@@ -397,7 +470,9 @@ async def start_web_server():
 
 async def main():
     await initialize_db()
-    await start_web_server()
+    # No need to run the web server when running locally for testing.
+    # If deploying to a service like Render, you can uncomment the next line.
+    # await start_web_server()
     print("🚀 Bot is running...")
     await dp.start_polling(bot)
 
